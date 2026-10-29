@@ -1,0 +1,17 @@
+gameinfo
+{
+	AddEventHandlers = "StillMAP01Handler"
+}
+
+map MAP01 lookup "HUSTR_1"
+{
+	levelnum = 1
+	titlepatch = "CWILV00"
+	next = "MAP01"
+	secretnext = "MAP01"
+	sky1 = "SKY1"
+	cluster = 5
+	par = 30
+	music = "$MUSIC_RUNNIN"
+	NoIntermission
+}

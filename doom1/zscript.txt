@@ -1,0 +1,190 @@
+version "4.10.0"
+
+// Still E1M1
+// E1M1 reloads itself. Each clear adds meaner copies. Dying does not count.
+
+class StillE1M1Announce : Actor
+{
+	Default
+	{
+		+NOINTERACTION
+		+NOBLOCKMAP
+		+NOGRAVITY
+		+NOCLIP
+	}
+
+	States
+	{
+	Spawn:
+		TNT1 A 10;
+		TNT1 A 0
+		{
+			A_PrintBold(String.Format("\crCYCLE %d", args[0]));
+		}
+		Stop;
+	}
+}
+
+class StillE1M1Handler : StaticEventHandler
+{
+	int cycles;
+	bool died;
+
+	static const class<Actor> chain[] =
+	{
+		"Zombieman",
+		"ShotgunGuy",
+		"DoomImp",
+		"Demon",
+		"Cacodemon",
+		"BaronOfHell",
+		"Cyberdemon"
+	};
+
+	override void NewGame()
+	{
+		cycles = 0;
+		died = false;
+	}
+
+	override void PlayerDied(PlayerEvent e)
+	{
+		if (level.MapName ~== "E1M1")
+			died = true;
+	}
+
+	override void WorldUnloaded(WorldEvent e)
+	{
+		if ((level.MapName ~== "E1M1") && !died)
+			cycles++;
+		died = false;
+	}
+
+	override void WorldLoaded(WorldEvent e)
+	{
+		if (!(level.MapName ~== "E1M1"))
+			return;
+
+		int shown = cycles + 1;
+		int already = CountMonsters();
+		if (cycles > 0)
+			SpawnExtras(cycles);
+		Announce(shown);
+		Console.Printf("Still E1M1: cycle %d, monsters %d", shown, CountMonsters());
+		Console.Printf("Still E1M1: originals %d", already);
+	}
+
+	static void Announce(int shown)
+	{
+		let sign = StillE1M1Announce(Actor.Spawn("StillE1M1Announce", (0, 0, 0), NO_REPLACE));
+		if (sign)
+			sign.args[0] = shown;
+	}
+
+	static class<Actor> Promote(class<Actor> from, int steps)
+	{
+		int idx = -1;
+		for (int i = 0; i < StillE1M1Handler.chain.Size(); i++)
+		{
+			if (from == StillE1M1Handler.chain[i])
+			{
+				idx = i;
+				break;
+			}
+		}
+		if (idx < 0 || steps <= 0)
+			return from;
+		return StillE1M1Handler.chain[min(idx + steps, StillE1M1Handler.chain.Size() - 1)];
+	}
+
+	static int CountMonsters()
+	{
+		int count = 0;
+		ThinkerIterator it = ThinkerIterator.Create("Actor");
+		Actor mo = Actor(it.Next());
+		while (mo)
+		{
+			if (mo.bISMONSTER && !mo.bFRIENDLY && mo.health > 0 && !mo.player)
+				count++;
+			mo = Actor(it.Next());
+		}
+		return count;
+	}
+
+	static int KindIndex(class<Actor> from)
+	{
+		for (int i = 0; i < StillE1M1Handler.chain.Size(); i++)
+		{
+			if (from == StillE1M1Handler.chain[i])
+				return i;
+		}
+		return -1;
+	}
+
+	static void SpawnExtras(int cycle)
+	{
+		Array<int> xs;
+		Array<int> ys;
+		Array<int> zs;
+		Array<int> face;
+		Array<int> kinds;
+
+		ThinkerIterator it = ThinkerIterator.Create("Actor");
+		Actor mo = Actor(it.Next());
+		while (mo)
+		{
+			if (mo.bISMONSTER && !mo.bFRIENDLY && mo.health > 0 && !mo.player)
+			{
+				int idx = KindIndex(mo.GetClass());
+				if (idx >= 0)
+				{
+					xs.Push(int(mo.pos.x));
+					ys.Push(int(mo.pos.y));
+					zs.Push(int(mo.pos.z));
+					face.Push(int(mo.angle));
+					kinds.Push(idx);
+				}
+			}
+			mo = Actor(it.Next());
+		}
+
+		int copies = min(cycle, 3);
+		int steps = max(cycle - 1, 0) / 2;
+
+		for (int i = 0; i < xs.Size(); i++)
+		{
+			class<Actor> kind = Promote(StillE1M1Handler.chain[kinds[i]], steps);
+			vector3 origin = (xs[i], ys[i], zs[i]);
+			for (int n = 0; n < copies; n++)
+				TrySpawn(kind, origin, face[i], n);
+		}
+	}
+
+	static void TrySpawn(class<Actor> kind, Vector3 origin, double faceAng, int n)
+	{
+		for (int ring = 1; ring <= 3; ring++)
+		{
+			for (int k = 0; k < 8; k++)
+			{
+				double ang = faceAng + (n * 37) + (k * 45);
+				double dist = 48.0 * ring;
+				vector3 spot = (origin.x + cos(ang) * dist, origin.y + sin(ang) * dist, origin.z);
+				let extra = Actor.Spawn(kind, spot, NO_REPLACE);
+				if (!extra)
+					continue;
+				if (!extra.TestMobjLocation())
+				{
+					extra.Destroy();
+					continue;
+				}
+				extra.angle = faceAng;
+				return;
+			}
+		}
+
+		vector3 spot = (origin.x + 32 + (n * 20), origin.y + 32, origin.z);
+		let extra = Actor.Spawn(kind, spot, NO_REPLACE);
+		if (extra)
+			extra.angle = faceAng;
+	}
+}

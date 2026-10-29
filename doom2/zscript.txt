@@ -1,0 +1,154 @@
+version "4.10.0"
+
+// Still MAP01
+// MAP01 reloads itself. Each clear adds more of the same monsters. Dying does not count.
+
+class StillMAP01Announce : Actor
+{
+	Default
+	{
+		+NOINTERACTION
+		+NOBLOCKMAP
+		+NOGRAVITY
+		+NOCLIP
+	}
+
+	States
+	{
+	Spawn:
+		TNT1 A 10;
+		TNT1 A 0
+		{
+			A_PrintBold(String.Format("\crCYCLE %d", args[0]));
+		}
+		Stop;
+	}
+}
+
+class StillMAP01Handler : StaticEventHandler
+{
+	int cycles;
+	bool died;
+
+	override void NewGame()
+	{
+		cycles = 0;
+		died = false;
+	}
+
+	override void PlayerDied(PlayerEvent e)
+	{
+		if (level.MapName ~== "MAP01")
+			died = true;
+	}
+
+	override void WorldUnloaded(WorldEvent e)
+	{
+		if ((level.MapName ~== "MAP01") && !died)
+			cycles++;
+		died = false;
+	}
+
+	override void WorldLoaded(WorldEvent e)
+	{
+		if (!(level.MapName ~== "MAP01"))
+			return;
+
+		int shown = cycles + 1;
+		int already = CountMonsters();
+		if (cycles > 0)
+			SpawnExtras(cycles);
+		Announce(shown);
+		Console.Printf("Still MAP01: cycle %d, monsters %d", shown, CountMonsters());
+		Console.Printf("Still MAP01: originals %d", already);
+	}
+
+	static void Announce(int shown)
+	{
+		let sign = StillMAP01Announce(Actor.Spawn("StillMAP01Announce", (0, 0, 0), NO_REPLACE));
+		if (sign)
+			sign.args[0] = shown;
+	}
+
+	static int CountMonsters()
+	{
+		int count = 0;
+		ThinkerIterator it = ThinkerIterator.Create("Actor");
+		Actor mo = Actor(it.Next());
+		while (mo)
+		{
+			if (mo.bISMONSTER && !mo.bFRIENDLY && mo.health > 0 && !mo.player)
+				count++;
+			mo = Actor(it.Next());
+		}
+		return count;
+	}
+
+	static void SpawnExtras(int cycle)
+	{
+		Array<Actor> sources;
+
+		ThinkerIterator it = ThinkerIterator.Create("Actor");
+		Actor mo = Actor(it.Next());
+		while (mo)
+		{
+			if (mo.bISMONSTER && !mo.bFRIENDLY && mo.health > 0 && !mo.player)
+				sources.Push(mo);
+			mo = Actor(it.Next());
+		}
+
+		int copies = cycle;
+		int placed = 0;
+		for (int i = 0; i < sources.Size(); i++)
+		{
+			for (int n = 0; n < copies; n++)
+			{
+				if (TrySpawn(sources[i], n))
+					placed++;
+			}
+		}
+		Console.Printf("Still MAP01: placed %d of %d", placed, sources.Size() * copies);
+	}
+
+	// Same species, on open floor the original can see. No spot means skip.
+	static bool TrySpawn(Actor source, int n)
+	{
+		double faceAng = source.angle;
+		double floor = source.floorz;
+		double tall = source.height;
+		vector3 origin = source.pos;
+
+		for (int ring = 1; ring <= 8; ring++)
+		{
+			for (int k = 0; k < 12; k++)
+			{
+				double ang = faceAng + (n * 19) + (k * 30);
+				double dist = 36.0 + (ring * 28.0);
+				vector2 xy = (origin.x + cos(ang) * dist, origin.y + sin(ang) * dist);
+				vector3 probe = (xy.x, xy.y, floor);
+				if (!level.IsPointInLevel(probe))
+					continue;
+
+				Sector sec = level.PointInSector(xy);
+				double z = sec.floorplane.ZatPoint(xy);
+				double top = sec.ceilingplane.ZatPoint(xy);
+				if (top - z < tall)
+					continue;
+				if (abs(z - floor) > 24)
+					continue;
+
+				let extra = Actor.Spawn(source.GetClass(), (xy.x, xy.y, z), NO_REPLACE);
+				if (!extra)
+					continue;
+				if (!extra.TestMobjLocation() || !extra.CheckSight(source, SF_IGNOREVISIBILITY))
+				{
+					extra.Destroy();
+					continue;
+				}
+				extra.angle = faceAng;
+				return true;
+			}
+		}
+		return false;
+	}
+}
