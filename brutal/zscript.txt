@@ -1,0 +1,466 @@
+version "4.10.0"
+
+// Loaded after Brutal. MAP01 reloads itself. Each clear adds 1 to 3 more of the
+// same monsters. Dying does not count. The outdoor item adds 1 to 3 shotgun
+// stacks. Shell boxes restock on the floor, and the shell reserve holds 400.
+
+class YardGunPower : Inventory
+{
+	Default
+	{
+		Inventory.MaxAmount 1000;
+		Inventory.InterHubAmount 1000;
+		Inventory.PickupMessage "Shotgun hits harder.";
+		Inventory.PickupSound "misc/p_pkup";
+		+INVENTORY.FANCYPICKUPSOUND
+		Radius 20;
+		Height 16;
+	}
+
+	States
+	{
+	Spawn:
+		SOUL ABCDCB 6 Bright;
+		Loop;
+	}
+
+	override bool TryPickup(in out Actor toucher)
+	{
+		Amount = Random(1, 3);
+		bool ok = Super.TryPickup(toucher);
+		if (ok && toucher)
+			toucher.A_PrintBold(String.Format("\crSHOTGUN +%d", toucher.CountInv("YardGunPower")));
+		return ok;
+	}
+
+	override void ModifyDamage(int damage, Name damageType, out int newdamage, bool passive, Actor inflictor, Actor source, int flags)
+	{
+		newdamage = damage;
+		if (passive || !owner || !owner.player || (flags & DMG_NO_ENHANCE))
+			return;
+
+		let weap = owner.player.ReadyWeapon;
+		if (weap && ShellGun(weap.GetClassName()))
+			newdamage = damage + (5 * Amount);
+	}
+
+	static bool ShellGun(Name kind)
+	{
+		return kind == 'Shot_Gun'
+			|| kind == 'YardPump'
+			|| kind == 'SSG'
+			|| kind == 'ClassicShotgun'
+			|| kind == 'ClassicSSG'
+			|| kind == 'AssaultShotgun'
+			|| kind == 'Shotgun'
+			|| kind == 'SuperShotgun';
+	}
+}
+
+class YardAnnounce : Actor
+{
+	Default
+	{
+		+NOINTERACTION
+		+NOBLOCKMAP
+		+NOGRAVITY
+		+NOCLIP
+	}
+
+	States
+	{
+	Spawn:
+		TNT1 A 10;
+		TNT1 A 0
+		{
+			A_PrintBold(String.Format("\crCYCLE %d", args[0]));
+		}
+		Stop;
+	}
+}
+
+class YardHandler : StaticEventHandler
+{
+	int cycles;
+	int extras;
+	bool died;
+
+	override void NewGame()
+	{
+		cycles = 0;
+		extras = 0;
+		died = false;
+	}
+
+	override void PlayerDied(PlayerEvent e)
+	{
+		if (level.MapName ~== "MAP01")
+			died = true;
+	}
+
+	override void WorldUnloaded(WorldEvent e)
+	{
+		if ((level.MapName ~== "MAP01") && !died)
+		{
+			cycles++;
+			extras += Random(1, 3);
+		}
+		died = false;
+	}
+
+	override void PlayerEntered(PlayerEvent e)
+	{
+		if (!(level.MapName ~== "MAP01"))
+			return;
+		let who = players[e.PlayerNumber].mo;
+		if (who)
+			RaiseShells(who);
+	}
+
+	// Brutal gives the original pump by name, and that class reloads to 9.
+	// Key 3 only cycles weapons listed in the slot, so the replacement has to
+	// be given before the original is removed, then selected if it was coming up.
+	override void WorldTick()
+	{
+		let who = players[0].mo;
+		if (!who || !who.player)
+			return;
+		let gun = who.FindInventory("Shot_Gun");
+		if (!gun || gun.GetClassName() == 'YardPump')
+			return;
+		bool take = who.player.ReadyWeapon == gun || who.player.PendingWeapon == gun;
+		who.RemoveInventory(gun);
+		if (!who.FindInventory("YardPump"))
+			who.GiveInventory("YardPump", 1);
+		if (take && who.FindInventory("YardPump"))
+			who.A_SelectWeapon("YardPump");
+	}
+
+	override void WorldLoaded(WorldEvent e)
+	{
+		if (!(level.MapName ~== "MAP01"))
+			return;
+
+		int shown = cycles + 1;
+		if (players[0].mo)
+			RaiseShells(players[0].mo);
+		if (extras > 0)
+			SpawnExtras(extras);
+		int boxes = SpawnAmmo();
+		int guards = SpawnYard(extras);
+		let sign = YardAnnounce(Actor.Spawn("YardAnnounce", (0, 0, 0), NO_REPLACE));
+		if (sign)
+			sign.args[0] = shown;
+		Console.Printf("Yard: cycle %d, extras %d, guards %d, shell boxes %d", shown, extras, guards, boxes);
+	}
+
+	// Brutal's shell reserve stops at 50. The loop needs a much deeper pocket.
+	static void RaiseShells(Actor who)
+	{
+		let shells = Ammo(who.FindInventory("AmmoShell"));
+		if (!shells)
+		{
+			who.GiveInventory("AmmoShell", 1);
+			shells = Ammo(who.FindInventory("AmmoShell"));
+		}
+		if (!shells)
+			return;
+		shells.MaxAmount = 400;
+		shells.BackpackMaxAmount = 400;
+
+		let mag = Ammo(who.FindInventory("ShotgunAmmo"));
+		if (!mag)
+			return;
+		mag.MaxAmount = 20;
+		mag.BackpackMaxAmount = 20;
+	}
+
+	static int SpawnAmmo()
+	{
+		int placed = 0;
+		Actor who = players[0].mo;
+		if (who)
+			placed += Scatter("AmmoShellBox", who, 6, 0);
+
+		Array<Actor> sources;
+		ThinkerIterator it = ThinkerIterator.Create("Actor");
+		Actor mo = Actor(it.Next());
+		while (mo)
+		{
+			if (mo.bISMONSTER && !mo.bFRIENDLY && mo.health > 0 && !mo.player)
+				sources.Push(mo);
+			mo = Actor(it.Next());
+		}
+
+		int budget = 48;
+		int step = sources.Size() > budget ? sources.Size() / budget : 1;
+		for (int i = 0; i < sources.Size(); i += step)
+			placed += Scatter("AmmoShellBox", sources[i], 1, 3 + i);
+		return placed;
+	}
+
+	static int Scatter(class<Actor> kind, Actor anchor, int want, int salt)
+	{
+		int placed = 0;
+		for (int n = 0; n < want; n++)
+		{
+			if (TrySpawnItem(kind, anchor, salt + n))
+				placed++;
+		}
+		return placed;
+	}
+
+	static bool TrySpawnItem(class<Actor> kind, Actor anchor, int n)
+	{
+		double floor = anchor.floorz;
+		double tall = GetDefaultByType(kind).height;
+		vector3 origin = anchor.pos;
+
+		for (int ring = 1; ring <= 6; ring++)
+		{
+			for (int k = 0; k < 12; k++)
+			{
+				double ang = anchor.angle + (n * 28) + (k * 30);
+				double dist = 64.0 + (ring * 32.0);
+				vector2 xy = (origin.x + cos(ang) * dist, origin.y + sin(ang) * dist);
+				if (!level.IsPointInLevel((xy.x, xy.y, floor)))
+					continue;
+
+				Sector sec = level.PointInSector(xy);
+				double z = sec.floorplane.ZatPoint(xy);
+				double top = sec.ceilingplane.ZatPoint(xy);
+				if (top - z < tall)
+					continue;
+				if (abs(z - floor) > 24)
+					continue;
+
+				let item = Actor.Spawn(kind, (xy.x, xy.y, z), NO_REPLACE);
+				if (!item)
+					continue;
+				if (!item.TestMobjLocation() || !item.CheckSight(anchor, SF_IGNOREVISIBILITY))
+				{
+					item.Destroy();
+					continue;
+				}
+				return true;
+			}
+		}
+		return false;
+	}
+
+	static int SpawnYard(int pressure)
+	{
+		Actor gun = MapShotgun();
+		if (!gun)
+		{
+			Console.Printf("Yard: no shotgun");
+			return 0;
+		}
+
+		Actor item = null;
+		for (int ring = 2; ring <= 40 && !item; ring++)
+		{
+			for (int k = 0; k < 16 && !item; k++)
+			{
+				double ang = (k * 22.5) + (ring * 7);
+				double dist = ring * 64.0;
+				vector2 xy = (gun.pos.x + cos(ang) * dist, gun.pos.y + sin(ang) * dist);
+				if (!Outside(xy))
+					continue;
+				item = SpawnLoose("YardGunPower", xy);
+			}
+		}
+		if (!item)
+		{
+			Console.Printf("Yard: no sky near the shotgun");
+			return 0;
+		}
+
+		class<Actor> kind = HeavyKind(pressure);
+		int want = Random(1, 3);
+		int placed = 0;
+		for (int n = 0; n < want; n++)
+		{
+			if (TrySpawnKind(kind, item, n))
+				placed++;
+		}
+		if (placed == 0 && kind != "Demon")
+		{
+			if (TrySpawnKind("Demon", item, want))
+				placed++;
+		}
+		return placed;
+	}
+
+	static Actor MapShotgun()
+	{
+		ThinkerIterator it = ThinkerIterator.Create("ShotgunSpawner");
+		Actor mo = Actor(it.Next());
+		Actor best = null;
+		double bestD = 0;
+		Actor start = players[0].mo;
+		while (mo)
+		{
+			double d = start ? mo.Distance3D(start) : 0;
+			if (!best || d < bestD)
+			{
+				best = mo;
+				bestD = d;
+			}
+			mo = Actor(it.Next());
+		}
+		return best;
+	}
+
+	static bool Outside(vector2 xy)
+	{
+		if (!level.IsPointInLevel((xy.x, xy.y, 0)))
+			return false;
+		Sector sec = level.PointInSector(xy);
+		if (sec.GetTexture(sector.ceiling) != skyflatnum)
+			return false;
+		double z = sec.floorplane.ZatPoint(xy);
+		double top = sec.ceilingplane.ZatPoint(xy);
+		return top - z >= 96;
+	}
+
+	static class<Actor> HeavyKind(int pressure)
+	{
+		static const class<Actor> kinds[] =
+		{
+			"Demon",
+			"Cacodemon",
+			"Revenant",
+			"HellKnight",
+			"BaronOfHell"
+		};
+		int step = pressure / 4;
+		if (step >= kinds.Size())
+			step = kinds.Size() - 1;
+		if (step < 0)
+			step = 0;
+		return kinds[step];
+	}
+
+	static Actor SpawnLoose(class<Actor> kind, vector2 xy)
+	{
+		Sector sec = level.PointInSector(xy);
+		double z = sec.floorplane.ZatPoint(xy);
+		double top = sec.ceilingplane.ZatPoint(xy);
+		if (top - z < GetDefaultByType(kind).height)
+			return null;
+
+		let mo = Actor.Spawn(kind, (xy.x, xy.y, z), NO_REPLACE);
+		if (!mo)
+			return null;
+		if (!mo.TestMobjLocation())
+		{
+			mo.Destroy();
+			return null;
+		}
+		return mo;
+	}
+
+	static bool TrySpawnKind(class<Actor> kind, Actor anchor, int n)
+	{
+		double floor = anchor.floorz;
+		double tall = GetDefaultByType(kind).height;
+		vector3 origin = anchor.pos;
+
+		for (int ring = 1; ring <= 6; ring++)
+		{
+			for (int k = 0; k < 12; k++)
+			{
+				double ang = (n * 47) + (k * 30);
+				double dist = 72.0 + (ring * 24.0);
+				vector2 xy = (origin.x + cos(ang) * dist, origin.y + sin(ang) * dist);
+				if (!Outside(xy))
+					continue;
+				if (abs(level.PointInSector(xy).floorplane.ZatPoint(xy) - floor) > 24)
+					continue;
+
+				Sector sec = level.PointInSector(xy);
+				double z = sec.floorplane.ZatPoint(xy);
+				if (sec.ceilingplane.ZatPoint(xy) - z < tall)
+					continue;
+
+				let extra = Actor.Spawn(kind, (xy.x, xy.y, z), NO_REPLACE);
+				if (!extra)
+					continue;
+				if (!extra.TestMobjLocation() || !extra.CheckSight(anchor, SF_IGNOREVISIBILITY))
+				{
+					extra.Destroy();
+					continue;
+				}
+				extra.angle = extra.AngleTo(anchor);
+				return true;
+			}
+		}
+		return false;
+	}
+
+	static void SpawnExtras(int copies)
+	{
+		Array<Actor> sources;
+		ThinkerIterator it = ThinkerIterator.Create("Actor");
+		Actor mo = Actor(it.Next());
+		while (mo)
+		{
+			if (mo.bISMONSTER && !mo.bFRIENDLY && mo.health > 0 && !mo.player)
+				sources.Push(mo);
+			mo = Actor(it.Next());
+		}
+
+		int placed = 0;
+		for (int i = 0; i < sources.Size(); i++)
+		{
+			for (int n = 0; n < copies; n++)
+			{
+				if (TrySpawn(sources[i], n))
+					placed++;
+			}
+		}
+		Console.Printf("Yard: placed %d of %d", placed, sources.Size() * copies);
+	}
+
+	// Same species, on open floor the original can see. No spot means skip.
+	static bool TrySpawn(Actor source, int n)
+	{
+		double faceAng = source.angle;
+		double floor = source.floorz;
+		double tall = source.height;
+		vector3 origin = source.pos;
+
+		for (int ring = 1; ring <= 8; ring++)
+		{
+			for (int k = 0; k < 12; k++)
+			{
+				double ang = faceAng + (n * 19) + (k * 30);
+				double dist = 36.0 + (ring * 28.0);
+				vector2 xy = (origin.x + cos(ang) * dist, origin.y + sin(ang) * dist);
+				if (!level.IsPointInLevel((xy.x, xy.y, floor)))
+					continue;
+
+				Sector sec = level.PointInSector(xy);
+				double z = sec.floorplane.ZatPoint(xy);
+				double top = sec.ceilingplane.ZatPoint(xy);
+				if (top - z < tall)
+					continue;
+				if (abs(z - floor) > 24)
+					continue;
+
+				let extra = Actor.Spawn(source.GetClass(), (xy.x, xy.y, z), NO_REPLACE);
+				if (!extra)
+					continue;
+				if (!extra.TestMobjLocation() || !extra.CheckSight(source, SF_IGNOREVISIBILITY))
+				{
+					extra.Destroy();
+					continue;
+				}
+				extra.angle = faceAng;
+				return true;
+			}
+		}
+		return false;
+	}
+}

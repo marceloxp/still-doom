@@ -1,0 +1,16 @@
+gameinfo
+{
+	AddEventHandlers = "YardHandler"
+}
+
+map MAP01 lookup "PHUSTR_1"
+{
+	titlepatch = "CWILV00"
+	next = "MAP01"
+	secretnext = "MAP01"
+	sky1 = "SKY1"
+	cluster = 5
+	par = 30
+	music = "$MUSIC_RUNNIN"
+	NoIntermission
+}

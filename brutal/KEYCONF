@@ -1,0 +1,3 @@
+weaponsection "Brutal_Doom"
+
+setslot 3 AssaultShotgun YardPump Shot_Gun SSG ClassicShotgun ClassicSSG
